@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -12,6 +13,7 @@ import { Heart, Upload, CheckCircle, ArrowLeft, ArrowRight, DollarSign, FileText
 import Link from "next/link"
 
 export default function LoanApplicationPage() {
+  const router = useRouter()
   const [step, setStep] = useState(1)
   const [formData, setFormData] = useState({
     loanAmount: "",
@@ -90,12 +92,14 @@ export default function LoanApplicationPage() {
       <header className="bg-white shadow-sm border-b">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <Link href="/dashboard">
-              <Button variant="ghost" size="sm">
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Back
-              </Button>
-            </Link>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => router.back()}
+            >
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back
+            </Button>
             <div className="flex items-center space-x-3">
               <div className="w-8 h-8 bg-gradient-to-r from-green-600 to-blue-600 rounded-lg flex items-center justify-center">
                 <Heart className="w-4 h-4 text-white" />
@@ -132,9 +136,8 @@ export default function LoanApplicationPage() {
             ].map((stepItem) => (
               <div key={stepItem.num} className="flex flex-col items-center">
                 <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                    step >= stepItem.num ? "bg-green-600 text-white" : "bg-gray-200 text-gray-500"
-                  }`}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center ${step >= stepItem.num ? "bg-green-600 text-white" : "bg-gray-200 text-gray-500"
+                    }`}
                 >
                   <stepItem.icon className="w-4 h-4" />
                 </div>
