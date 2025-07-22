@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useCallback, useMemo, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -15,6 +15,9 @@ import Link from "next/link"
 export default function LoanApplicationPage() {
   const router = useRouter()
   const [step, setStep] = useState(1)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [uploadedFiles, setUploadedFiles] = useState<Record<string, File[]>>({})
   const [formData, setFormData] = useState({
     loanAmount: "",
     loanPurpose: "",
@@ -31,21 +34,204 @@ export default function LoanApplicationPage() {
     accountNumber: "",
   })
 
+  // Load saved form data on mount
+  useEffect(() => {
+    const savedData = localStorage.getItem('loan-application-draft')
+    const savedStep = localStorage.getItem('loan-application-step')
+    if (savedData) {
+      try {
+        setFormData(JSON.parse(savedData))
+      } catch (e) {
+        console.error('Failed to load saved form data')
+      }
+    }
+    if (savedStep) {
+      setStep(parseInt(savedStep))
+    }
+  }, [])
+
+  // Save form data to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('loan-application-draft', JSON.stringify(formData))
+    localStorage.setItem('loan-application-step', step.toString())
+  }, [formData, step])
+
   const totalSteps = 4
   const progress = (step / totalSteps) * 100
 
-  const handleNext = () => {
-    if (step < totalSteps) setStep(step + 1)
-  }
+  // Validation functions
+  const validateStep = useCallback((stepNumber: number): boolean => {
+    const newErrors: Record<string, string> = {}
 
-  const handlePrevious = () => {
-    if (step > 1) setStep(step - 1)
-  }
+    switch (stepNumber) {
+      case 1:
+        if (!formData.loanAmount || parseFloat(formData.loanAmount) <= 0) {
+          newErrors.loanAmount = "Please enter a valid loan amount"
+        }
+        if (parseFloat(formData.loanAmount) > 25000) {
+          newErrors.loanAmount = "Maximum loan amount is GH₵25,000"
+        }
+        if (!formData.loanPurpose) {
+          newErrors.loanPurpose = "Please select a loan purpose"
+        }
+        if (!formData.duration) {
+          newErrors.duration = "Please select loan duration"
+        }
+        break
+      case 2:
+        if (!formData.monthlyIncome || parseFloat(formData.monthlyIncome) <= 0) {
+          newErrors.monthlyIncome = "Please enter your monthly income"
+        }
+        if (!formData.monthlyExpenses || parseFloat(formData.monthlyExpenses) <= 0) {
+          newErrors.monthlyExpenses = "Please enter your monthly expenses"
+        }
+        if (!formData.bankName) {
+          newErrors.bankName = "Please select your bank"
+        }
+        if (!formData.accountNumber) {
+          newErrors.accountNumber = "Please enter your account number"
+        }
+        break
+      case 3:
+        if (!formData.guarantor1Name.trim()) {
+          newErrors.guarantor1Name = "Please enter first guarantor's name"
+        }
+        if (!formData.guarantor1Phone.trim()) {
+          newErrors.guarantor1Phone = "Please enter first guarantor's phone"
+        }
+        if (!formData.guarantor2Name.trim()) {
+          newErrors.guarantor2Name = "Please enter second guarantor's name"
+        }
+        if (!formData.guarantor2Phone.trim()) {
+          newErrors.guarantor2Phone = "Please enter second guarantor's phone"
+        }
+        break
+    }
 
-  const handleSubmit = () => {
-    // Handle form submission
-    setStep(5) // Success step
-  }
+    setErrors(newErrors)
+    return Object.keys(newErrors).length === 0
+  }, [formData])
+
+  // Format currency input
+  const formatCurrency = useCallback((value: string) => {
+    const numericValue = value.replace(/[^\d]/g, '')
+    return numericValue ? parseInt(numericValue).toLocaleString() : ''
+  }, [])
+
+  // Handle file uploads
+  const handleFileUpload = useCallback((fileType: string, files: FileList | null) => {
+    if (files) {
+      setUploadedFiles(prev => ({
+        ...prev,
+        [fileType]: Array.from(files)
+      }))
+    }
+  }, [])
+
+  const handleNext = useCallback(() => {
+    if (validateStep(step) && step < totalSteps) {
+      setStep(step + 1)
+    }
+  }, [step, totalSteps, validateStep])
+
+  const handlePrevious = useCallback(() => {
+    if (step > 1) {
+      setStep(step - 1)
+      setErrors({}) // Clear errors when going back
+    }
+  }, [step])
+
+  const handleSubmit = useCallback(async () => {
+    if (!validateStep(4)) return
+
+    setIsSubmitting(true)
+    try {
+      // Submit to API
+      const response = await fetch('/api/loan-application', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...formData,
+          uploadedFiles: Object.keys(uploadedFiles).reduce((acc, key) => {
+            acc[key] = uploadedFiles[key].map(file => ({
+              name: file.name,
+              size: file.size,
+              type: file.type
+            }))
+            return acc
+          }, {} as Record<string, any>)
+        })
+      })
+
+      const result = await response.json()
+
+      if (result.success) {
+        // Clear saved draft after successful submission
+        localStorage.removeItem('loan-application-draft')
+        localStorage.removeItem('loan-application-step')
+
+        setStep(5) // Success step
+      } else {
+        throw new Error(result.error || 'Submission failed')
+      }
+    } catch (error) {
+      console.error('Submission failed:', error)
+      // You could add a toast notification here
+      alert('Failed to submit application. Please try again.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }, [validateStep, formData, uploadedFiles])
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'ArrowRight' && step < totalSteps) {
+          e.preventDefault()
+          handleNext()
+        } else if (e.key === 'ArrowLeft' && step > 1) {
+          e.preventDefault()
+          handlePrevious()
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [step, totalSteps, handleNext, handlePrevious])
+
+  // Memoized calculations
+  const loanCalculations = useMemo(() => {
+    if (!formData.loanAmount || !formData.duration) return null
+
+    const principal = parseFloat(formData.loanAmount)
+    const months = parseInt(formData.duration)
+    const interestRate = 0.12 // 12% annual
+    const totalAmount = principal * (1 + interestRate)
+    const monthlyPayment = totalAmount / months
+    const totalInterest = principal * interestRate
+
+    return {
+      monthlyPayment: Math.round(monthlyPayment),
+      totalInterest: Math.round(totalInterest),
+      totalAmount: Math.round(totalAmount)
+    }
+  }, [formData.loanAmount, formData.duration])
+
+  const financialSummary = useMemo(() => {
+    if (!formData.monthlyIncome || !formData.monthlyExpenses) return null
+
+    const totalIncome = parseFloat(formData.monthlyIncome) + parseFloat(formData.otherIncome || '0')
+    const disposableIncome = totalIncome - parseFloat(formData.monthlyExpenses)
+
+    return {
+      totalIncome,
+      disposableIncome
+    }
+  }, [formData.monthlyIncome, formData.otherIncome, formData.monthlyExpenses])
 
   if (step === 5) {
     return (
@@ -168,7 +354,7 @@ export default function LoanApplicationPage() {
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="loanAmount" className="text-sm font-medium text-gray-700">
-                      Loan Amount (GH₵)
+                      Loan Amount (GH₵) *
                     </Label>
                     <Input
                       id="loanAmount"
@@ -176,20 +362,24 @@ export default function LoanApplicationPage() {
                       placeholder="10,000"
                       value={formData.loanAmount}
                       onChange={(e) => setFormData({ ...formData, loanAmount: e.target.value })}
-                      className="h-11"
+                      className={`h-11 ${errors.loanAmount ? 'border-red-500' : ''}`}
+                      aria-describedby={errors.loanAmount ? 'loanAmount-error' : undefined}
                     />
+                    {errors.loanAmount && (
+                      <p id="loanAmount-error" className="text-xs text-red-600">{errors.loanAmount}</p>
+                    )}
                     <p className="text-xs text-gray-500">Maximum eligible amount: GH₵25,000</p>
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="loanPurpose" className="text-sm font-medium text-gray-700">
-                      Loan Purpose
+                      Loan Purpose *
                     </Label>
                     <Select
                       value={formData.loanPurpose}
                       onValueChange={(value) => setFormData({ ...formData, loanPurpose: value })}
                     >
-                      <SelectTrigger className="h-11">
+                      <SelectTrigger className={`h-11 ${errors.loanPurpose ? 'border-red-500' : ''}`}>
                         <SelectValue placeholder="Select loan purpose" />
                       </SelectTrigger>
                       <SelectContent>
@@ -202,17 +392,20 @@ export default function LoanApplicationPage() {
                         <SelectItem value="other">Other</SelectItem>
                       </SelectContent>
                     </Select>
+                    {errors.loanPurpose && (
+                      <p className="text-xs text-red-600">{errors.loanPurpose}</p>
+                    )}
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="duration" className="text-sm font-medium text-gray-700">
-                      Loan Duration
+                      Loan Duration *
                     </Label>
                     <Select
                       value={formData.duration}
                       onValueChange={(value) => setFormData({ ...formData, duration: value })}
                     >
-                      <SelectTrigger className="h-11">
+                      <SelectTrigger className={`h-11 ${errors.duration ? 'border-red-500' : ''}`}>
                         <SelectValue placeholder="Select duration" />
                       </SelectTrigger>
                       <SelectContent>
@@ -223,27 +416,32 @@ export default function LoanApplicationPage() {
                         <SelectItem value="36">36 months</SelectItem>
                       </SelectContent>
                     </Select>
+                    {errors.duration && (
+                      <p className="text-xs text-red-600">{errors.duration}</p>
+                    )}
                   </div>
 
-                  {formData.loanAmount && formData.duration && (
+                  {loanCalculations && (
                     <div className="bg-green-50 p-4 rounded-lg">
                       <h4 className="font-semibold text-green-900 mb-2">Loan Summary</h4>
                       <div className="grid grid-cols-2 gap-4 text-sm">
                         <div>
                           <p className="text-green-700">Monthly Payment</p>
                           <p className="font-semibold text-green-900">
-                            GH₵
-                            {Math.round(
-                              (Number.parseInt(formData.loanAmount) * 1.12) / Number.parseInt(formData.duration),
-                            ).toLocaleString()}
+                            GH₵{loanCalculations.monthlyPayment.toLocaleString()}
                           </p>
                         </div>
                         <div>
                           <p className="text-green-700">Total Interest</p>
                           <p className="font-semibold text-green-900">
-                            GH₵{Math.round(Number.parseInt(formData.loanAmount) * 0.12).toLocaleString()}
+                            GH₵{loanCalculations.totalInterest.toLocaleString()}
                           </p>
                         </div>
+                      </div>
+                      <div className="mt-2 pt-2 border-t border-green-200">
+                        <p className="text-xs text-green-700">
+                          Total Amount: GH₵{loanCalculations.totalAmount.toLocaleString()}
+                        </p>
                       </div>
                     </div>
                   )}
@@ -255,7 +453,7 @@ export default function LoanApplicationPage() {
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="monthlyIncome" className="text-sm font-medium text-gray-700">
-                      Monthly Salary (GH₵)
+                      Monthly Salary (GH₵) *
                     </Label>
                     <Input
                       id="monthlyIncome"
@@ -263,8 +461,11 @@ export default function LoanApplicationPage() {
                       placeholder="3,500"
                       value={formData.monthlyIncome}
                       onChange={(e) => setFormData({ ...formData, monthlyIncome: e.target.value })}
-                      className="h-11"
+                      className={`h-11 ${errors.monthlyIncome ? 'border-red-500' : ''}`}
                     />
+                    {errors.monthlyIncome && (
+                      <p className="text-xs text-red-600">{errors.monthlyIncome}</p>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -333,31 +534,28 @@ export default function LoanApplicationPage() {
                     />
                   </div>
 
-                  {formData.monthlyIncome && formData.monthlyExpenses && (
+                  {financialSummary && (
                     <div className="bg-blue-50 p-4 rounded-lg">
                       <h4 className="font-semibold text-blue-900 mb-2">Financial Summary</h4>
                       <div className="grid grid-cols-2 gap-4 text-sm">
                         <div>
                           <p className="text-blue-700">Total Income</p>
                           <p className="font-semibold text-blue-900">
-                            GH₵
-                            {(
-                              Number.parseInt(formData.monthlyIncome) + Number.parseInt(formData.otherIncome || "0")
-                            ).toLocaleString()}
+                            GH₵{financialSummary.totalIncome.toLocaleString()}
                           </p>
                         </div>
                         <div>
                           <p className="text-blue-700">Disposable Income</p>
-                          <p className="font-semibold text-blue-900">
-                            GH₵
-                            {(
-                              Number.parseInt(formData.monthlyIncome) +
-                              Number.parseInt(formData.otherIncome || "0") -
-                              Number.parseInt(formData.monthlyExpenses)
-                            ).toLocaleString()}
+                          <p className={`font-semibold ${financialSummary.disposableIncome < 0 ? 'text-red-600' : 'text-blue-900'}`}>
+                            GH₵{financialSummary.disposableIncome.toLocaleString()}
                           </p>
                         </div>
                       </div>
+                      {financialSummary.disposableIncome < 0 && (
+                        <p className="text-xs text-red-600 mt-2">
+                          ⚠️ Your expenses exceed your income. Consider reviewing your budget.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -462,40 +660,110 @@ export default function LoanApplicationPage() {
                       <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
                       <p className="text-sm font-medium text-gray-700">Recent Payslips</p>
                       <p className="text-xs text-gray-500">Last 3 months (PDF, JPG, PNG)</p>
-                      <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" multiple />
-                      <Button type="button" variant="outline" size="sm" className="mt-2 bg-transparent">
+                      <input 
+                        type="file" 
+                        id="payslips"
+                        className="hidden" 
+                        accept=".pdf,.jpg,.jpeg,.png" 
+                        multiple 
+                        onChange={(e) => handleFileUpload('payslips', e.target.files)}
+                      />
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        size="sm" 
+                        className="mt-2 bg-transparent"
+                        onClick={() => document.getElementById('payslips')?.click()}
+                      >
                         Choose Files
                       </Button>
+                      {uploadedFiles.payslips && uploadedFiles.payslips.length > 0 && (
+                        <div className="mt-2 text-xs text-green-600">
+                          {uploadedFiles.payslips.length} file(s) selected
+                        </div>
+                      )}
                     </div>
 
                     <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-500 transition-colors">
                       <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
                       <p className="text-sm font-medium text-gray-700">Bank Statements</p>
                       <p className="text-xs text-gray-500">Last 6 months (PDF)</p>
-                      <input type="file" className="hidden" accept=".pdf" />
-                      <Button type="button" variant="outline" size="sm" className="mt-2 bg-transparent">
+                      <input 
+                        type="file" 
+                        id="bankStatements"
+                        className="hidden" 
+                        accept=".pdf" 
+                        onChange={(e) => handleFileUpload('bankStatements', e.target.files)}
+                      />
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        size="sm" 
+                        className="mt-2 bg-transparent"
+                        onClick={() => document.getElementById('bankStatements')?.click()}
+                      >
                         Choose File
                       </Button>
+                      {uploadedFiles.bankStatements && uploadedFiles.bankStatements.length > 0 && (
+                        <div className="mt-2 text-xs text-green-600">
+                          {uploadedFiles.bankStatements[0].name}
+                        </div>
+                      )}
                     </div>
 
                     <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-500 transition-colors">
                       <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
                       <p className="text-sm font-medium text-gray-700">Employment Letter</p>
                       <p className="text-xs text-gray-500">Current employment confirmation</p>
-                      <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" />
-                      <Button type="button" variant="outline" size="sm" className="mt-2 bg-transparent">
+                      <input 
+                        type="file" 
+                        id="employmentLetter"
+                        className="hidden" 
+                        accept=".pdf,.jpg,.jpeg,.png" 
+                        onChange={(e) => handleFileUpload('employmentLetter', e.target.files)}
+                      />
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        size="sm" 
+                        className="mt-2 bg-transparent"
+                        onClick={() => document.getElementById('employmentLetter')?.click()}
+                      >
                         Choose File
                       </Button>
+                      {uploadedFiles.employmentLetter && uploadedFiles.employmentLetter.length > 0 && (
+                        <div className="mt-2 text-xs text-green-600">
+                          {uploadedFiles.employmentLetter[0].name}
+                        </div>
+                      )}
                     </div>
 
                     <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-500 transition-colors">
                       <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
                       <p className="text-sm font-medium text-gray-700">Guarantor Consent Forms</p>
                       <p className="text-xs text-gray-500">Signed forms from both guarantors</p>
-                      <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" multiple />
-                      <Button type="button" variant="outline" size="sm" className="mt-2 bg-transparent">
+                      <input 
+                        type="file" 
+                        id="guarantorForms"
+                        className="hidden" 
+                        accept=".pdf,.jpg,.jpeg,.png" 
+                        multiple 
+                        onChange={(e) => handleFileUpload('guarantorForms', e.target.files)}
+                      />
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        size="sm" 
+                        className="mt-2 bg-transparent"
+                        onClick={() => document.getElementById('guarantorForms')?.click()}
+                      >
                         Choose Files
                       </Button>
+                      {uploadedFiles.guarantorForms && uploadedFiles.guarantorForms.length > 0 && (
+                        <div className="mt-2 text-xs text-green-600">
+                          {uploadedFiles.guarantorForms.length} file(s) selected
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -540,9 +808,10 @@ export default function LoanApplicationPage() {
                   <Button
                     type="button"
                     onClick={handleSubmit}
-                    className="bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700"
+                    disabled={isSubmitting}
+                    className="bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 disabled:opacity-50"
                   >
-                    Submit Application
+                    {isSubmitting ? "Submitting..." : "Submit Application"}
                   </Button>
                 )}
               </div>
